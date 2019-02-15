@@ -1,6 +1,12 @@
-local ScreenshotRequested = 0
-local Stages = 2
+
+-- Parameters
+local ScreenshotRequested = false
+local AnalyzeChunks = 20
+local CircleSegments = 16
+
+-- Variables
 local Painting
+local AnalyzeData
 
 -- Help: https://forum.facepunch.com/gmoddev/lzpr/Render-Targets-Alpha-Issues/1/
 local TEXTURE_FLAGS_CLAMP_S = 0x0004
@@ -49,7 +55,7 @@ local RenMat_TempAlpha = CreateMaterial( "mm_paint_temp_alpha_material"..CurTime
 } )
 
 function RequestAScreenshot()
-	ScreenshotRequested = Stages + 1
+	ScreenshotRequested = true
 end
 concommand.Add( "make_screenshot", RequestAScreenshot )
 
@@ -65,14 +71,14 @@ end
 concommand.Add( "mc_paint_calibrate", Calibrate )
 
 local click = false
-local clickpos
 hook.Add( "HUDShouldDraw", "HideHUD", function( name )
-	if ( ( click and name != "CHudGMod" and name != "CHudMenu" ) or ( ScreenshotRequested > 0 and ScreenshotRequested < Stages + 1 ) ) then return false end
+	if ( ( click and name != "CHudGMod" and name != "CHudMenu" ) or ScreenshotRequested ) then return false end
 end )
 
 local Style = 1
 local style = {}
 local LastMousePosX, LastMousePosX
+local clickpos, clicksize
 hook.Add( "Think", "Think_MC_Paint", function()
 	-- Style input
 	local colourmult = {
@@ -105,6 +111,9 @@ hook.Add( "Think", "Think_MC_Paint", function()
 			colourmult["$pp_colour_addr"] = 0.02
 			DrawColorModify( colourmult )
 		end,
+		function()
+			return true
+		end,
 	}
 	for inp = 1, #style do
 		if ( input.IsButtonDown( KEY_PAD_0 + inp ) ) then
@@ -116,6 +125,7 @@ hook.Add( "Think", "Think_MC_Paint", function()
 	-- Stroke input
 	click = input.IsMouseDown( MOUSE_LEFT )
 	clickpos = input.GetCursorPos
+	clicksize = 128
 	if ( LeapPoints[3] != nil ) then
 		local frame = LeapMotion_GetCurrentFrame()
 		if ( frame and frame.HandsNumber > 0 ) then
@@ -124,19 +134,39 @@ hook.Add( "Think", "Think_MC_Paint", function()
 			local width = math.abs( LeapPoints[1].x - LeapPoints[2].x )
 			local height = math.abs( LeapPoints[2].z - LeapPoints[3].z )
 			local pointOnPlane = Vector( math.abs( LeapPoints[1].x - pos.x ) / width, math.abs( LeapPoints[3].z - pos.z ) / height, 0 )
-			-- print( "-" )
-			-- PrintTable( LeapPoints )
-			-- print( pos )
-			-- print( pointOnPlane )
+			local depthdist = LeapPoints[1].y - pos.y
+			local depthmax = 45
+
 			click = true
 			clickpos = function() return ScrW() * pointOnPlane.x, ScrH() * ( 1 - pointOnPlane.y ) end
+			clicksize = clicksize * math.max( 0, ( ( depthdist / depthmax ) ) )
 		end
 	end
+	clicksize = click and clicksize or 0
 end )
 
 local Dirty = false
-local BorderAllowance = 0.5 -- Stroke border allowance to stop weird edge rendering (render big and then cut back down to size)
+local BorderAllowance = 5 -- Stroke border allowance to stop weird edge rendering (render big and then cut back down to size)
 hook.Add( "HUDPaint", "HUDPaint_DrawABox", function()
+	local function drawcanvas()
+		render.DrawTextureToScreen( RenTex_Painting ) -- TODO TEMP REMOVE
+		-- Brush location and size
+		local x, y = clickpos()
+		surface.DrawCircle( x, y, math.max( 1, clicksize ), 255, 255, 255 )
+
+		-- Debug test analyze
+		for x = 1, AnalyzeChunks do
+			for y = 1, AnalyzeChunks do
+				local ax, ay = GetAnalyzePos( x, y )
+				local w, h = 8, 8
+				surface.DrawRect( ax - w / 2, ay - h / 2, w, h )
+				-- local json = util.TableToJSON( AnalyzeData[x][y] )
+				local json = AnalyzeData[x][y]
+				draw.SimpleText( json, "DermaDefault", ax, ay )
+			end
+		end
+	end
+
 	if ( Painting ) then
 		if ( click ) then
 			-- First render to temp target for any unique effects
@@ -158,7 +188,6 @@ hook.Add( "HUDPaint", "HUDPaint_DrawABox", function()
 					render.SetStencilPassOperation( STENCILOPERATION_REPLACE )
 					render.SetStencilCompareFunction( STENCILCOMPARISONFUNCTION_ALWAYS )
 						cam.Start2D()
-								
 								render.SetStencilFailOperation( STENCILOPERATION_KEEP )
 								render.SetStencilZFailOperation( STENCILOPERATION_KEEP )
 								render.SetStencilPassOperation( STENCILOPERATION_KEEP )
@@ -177,28 +206,30 @@ hook.Add( "HUDPaint", "HUDPaint_DrawABox", function()
 				-- Now render the actual stroke
 				local circles = {}
 				cam.Start2D()
-					-- draw.SimpleText( "Hello there matthew!" )
-
 					local function mask()
 						local x, y = clickpos()
 						local dist = math.Distance( LastMousePosX, LastMousePosY, x, y )
 						local extra = 0
 						local off = 0
-						for p = 1 - extra, dist + extra do
-							local ix = ( LastMousePosX - x ) / dist * p
-							local iy = ( LastMousePosY - y ) / dist * p
-							local radius = 64
+						local distoff = 50
+							if ( dist < distoff ) then
+								distoff = 1
+							end
+						for p = 1 - extra, dist / distoff + extra do
+							local ix = ( LastMousePosX - x ) / dist * distoff * p
+							local iy = ( LastMousePosY - y ) / dist * distoff * p
+							local radius = clicksize
 								if ( p < 1 ) then
 									radius = radius / extra * ( extra - math.abs( 1 - p ) )
 									ix = ix * extra * ( math.abs( 1 - p ) ) * radius
 									iy = iy * extra * ( math.abs( 1 - p ) ) * radius
 									print( radius )
 								end
-							local seg = 16
+							local seg = CircleSegments
 							local rotate = 0
 							surface.SetDrawColor( 255, 255, 255, 100 )
 							table.insert( circles, { x = x + ix, y = y + iy, r = radius, s = seg, rotate = rotate } )
-							draw.Circle( x + ix, y + iy, radius / BorderAllowance, seg, rotate )
+							draw.Circle( x + ix, y + iy, radius * BorderAllowance, seg, rotate )
 						end
 						if ( dist != 0 ) then
 							Dirty = true
@@ -209,14 +240,14 @@ hook.Add( "HUDPaint", "HUDPaint_DrawABox", function()
 						surface.SetDrawColor( 255, 255, 255, 255 )
 						surface.SetMaterial( Painting )
 						surface.DrawTexturedRect( 0, 0, ScrW(), ScrH() )
-						style[Style]()
+						local blur = style[Style]()
 					end
 					draw.StencilBasic( mask, inner )
 				cam.End2D()
 			render.PopRenderTarget()
 
-			-- Now blur for paint stroke effect - No this makes the edge effect even MORE obvious
-			render.DrawTextureToScreen( RenTex_Painting )
+			-- Now blur for paint stroke effect
+			drawcanvas()
 			render.BlurRenderTarget( RenTex_Temp, 0, 0, 5 )
 
 			-- Then render down on to the canvas
@@ -233,75 +264,142 @@ hook.Add( "HUDPaint", "HUDPaint_DrawABox", function()
 				end
 				draw.StencilBasic( mask, inner )
 			render.PopRenderTarget()
+
+			if ( blur ) then
+				render.BlurRenderTarget( RenTex_Painting, 1, 1, 5 )
+			end
 		else
 			-- Reset lastmousepos
 			LastMousePosX, LastMousePosY = clickpos()
 		end
 
-		if ( Dirty ) then
-			-- Now blur for paint stroke effect
-			render.DrawTextureToScreen( RenTex_Painting ) -- Required BEFORE blur otherwise it can't render this frame
-			-- render.BlurRenderTarget( RenTex_Painting, 0, 0, 1 )
-			Dirty = false
-		end
-
-		-- temp test
-		render.DrawTextureToScreen( RenTex_Painting )
-		-- surface.SetMaterial( RenMat_Painting )
-		-- surface.SetDrawColor( 255, 255, 255, 255 )
-		-- surface.DrawTexturedRect( 0, 0, ScrW(), ScrH() )
+		-- This draw canvas only works if no blurring this frame
+		drawcanvas()
 	end
 end )
 
 hook.Add( "PostRender", "example_screenshot", function()
-			-- render.UpdateFullScreenDepthTexture()
-		-- print( render.SupportsPixelShaders_2_0() )
-	if ( ScreenshotRequested == 0 ) then return end
+	if ( ScreenshotRequested ) then
+		AnalyzeImage()
 
-	-- Store current render to replace after
-	if ( ScreenshotRequested == Stages + 1 ) then
-		render.CopyRenderTargetToTexture( RenTex_Temp )
-	end
-		-- Process
-		if ( ScreenshotRequested == 3 ) then
-			render.PushRenderTarget( RenTex_Painting )
-				render.ClearDepth()
-				render.Clear( 255, 255, 255, 255 )
-			render.PopRenderTarget()
-			-- render.DrawTextureToScreen( render.GetResolvedFullFrameDepth() )
-		elseif ( ScreenshotRequested == 2 ) then
-			-- DrawBloom( -0.1, 2, 9, 9, 1, 1, 1, 1, 1 )
-			-- DrawTexturize( 1, Material( "pp/texturize/plain.png" ) )
-			-- DrawSharpen( 100, 10 )
-			-- DrawToyTown( 1, ScrH() ) -- maybe
-
-			-- DrawTexturize( 1, Material( "pp/texturize/pattern1.png" ) )
-		elseif ( ScreenshotRequested == 1 ) then
-			-- DrawTexturize( 1, Material( "pp/texturize/pattern1.png" ) )
-		end
+		-- Clear
+		render.PushRenderTarget( RenTex_Painting )
+			render.ClearDepth()
+			render.Clear( 255, 255, 255, 255 )
+		render.PopRenderTarget()
 
 		-- Store
 		local data = render.Capture( {
 			format = "jpeg",
-			quality = 70, //100 is max quality, but 70 is good enough.
+			quality = 70,
 			h = ScrH(),
 			w = ScrW(),
 			x = 0,
 			y = 0,
 		} )
 		file.CreateDir( "mc_paint" )
-		local f = file.Open( "mc_paint/painting"..ScreenshotRequested..".jpg", "wb", "DATA" )
+		local f = file.Open( "mc_paint/painting.jpg", "wb", "DATA" )
 			f:Write( data )
 		f:Close()
 
 		-- Load in as material
-		Painting = Material( "../data/mc_paint/painting2.jpg" )
-	-- Restore old render
-	render.DrawTextureToScreen( RenTex_Temp )
+		Painting = Material( "../data/mc_paint/painting.jpg" )
 
-	-- Next stage
-	ScreenshotRequested = ScreenshotRequested - 1
+		ScreenshotRequested = false
+	end
 end )
+
+function AnalyzeImage()
+	-- Break screen down into chunks (try 2:2 to start?)
+	local dist = 1000000
+	AnalyzeData = {}
+	local types = {}
+	for x = 1, AnalyzeChunks do
+		if ( !AnalyzeData[x] ) then
+			AnalyzeData[x] = {}
+		end
+
+		for y = 1, AnalyzeChunks do
+			local dir = gui.ScreenToVector( GetAnalyzePos( x, y ) )
+			local tr = util.QuickTrace( LocalPlayer():EyePos(), dir * dist, LocalPlayer() )
+			local info = AnalyzeGetInfo( tr )
+				if ( !types[info] ) then
+					types[info] = 0
+				end
+				types[info] = types[info] + 1
+			AnalyzeData[x][y] = info
+		end
+	end
+
+	-- Percentage output
+	local total = 0
+		for k, typ in pairs( types ) do
+			total = total + typ
+		end
+	print( "Total: " .. total )
+	for k, typ in pairs ( types ) do
+		print( k .. ": " .. typ / total * 100 )
+	end
+
+	-- Raytrace to find hit
+		-- If ent then
+		-- If world then
+			-- Get texture of world to find if sky or ground/wall/etc
+			-- Material name could offer more info (like "building" or "wall" or "grass" etc)
+		-- How detect water?
+	-- Debug show these on screen with analyzed info
+end
+
+local AnalyzeMatTypes = {
+	[MAT_ANTLION] = "Antlion",
+	[MAT_BLOODYFLESH] = "Flesh",
+	[MAT_CONCRETE] = "Concrete",
+	[MAT_DIRT] = "Dirt",
+	[MAT_EGGSHELL] = "Egg",
+	[MAT_FLESH] = "Flesh",
+	[MAT_GRATE] = "Grate",
+	[MAT_ALIENFLESH] = "Alien Flesh",
+	[MAT_SNOW] = "Snow",
+	[MAT_PLASTIC] = "Plastic",
+	[MAT_METAL] = "Metal",
+	[MAT_SAND] = "Sand",
+	[MAT_FOLIAGE] = "Foliage",
+	[MAT_COMPUTER] = "Computer",
+	[MAT_SLOSH] = "Liquid",
+	[MAT_TILE] = "Tile",
+	[MAT_GRASS] = "Grass",
+	[MAT_VENT] = "Vent",
+	[MAT_WOOD] = "Wood",
+	[MAT_GLASS] = "Glass",
+	[MAT_WARPSHIELD] = "Shield",
+}
+
+function AnalyzeGetInfo( tr )
+	-- Water and sky have priority
+	if ( bit.band( util.PointContents( tr.HitPos ), CONTENTS_WATER ) == CONTENTS_WATER ) then
+		return "Water"
+	end
+	if ( tr.HitSky ) then
+		return "Sky"
+	end
+
+	if ( tr.HitNonWorld and tr.Entity ) then
+		return tr.Entity:GetClass()
+	end
+
+	-- World hit material types
+	if ( AnalyzeMatTypes[tr.MatType] ) then
+		return AnalyzeMatTypes[tr.MatType]
+	end
+
+	print( tr.MatType )
+	return "Unknown"
+end
+
+function GetAnalyzePos( x, y )
+	local off = ( 1 / 2 ) / AnalyzeChunks
+	return ( ( x / AnalyzeChunks ) - off ) * ScrW(), ( ( y / AnalyzeChunks ) - off ) * ScrH()
+end
 
 function draw.Circle( x, y, radius, seg, rotate )
 	local cir = PRK_GetCirclePoints( x, y, radius, seg, rotate )
