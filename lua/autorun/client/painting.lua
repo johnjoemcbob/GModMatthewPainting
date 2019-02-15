@@ -135,6 +135,7 @@ hook.Add( "Think", "Think_MC_Paint", function()
 end )
 
 local Dirty = false
+local BorderAllowance = 0.5 -- Stroke border allowance to stop weird edge rendering (render big and then cut back down to size)
 hook.Add( "HUDPaint", "HUDPaint_DrawABox", function()
 	if ( Painting ) then
 		if ( click ) then
@@ -174,14 +175,15 @@ hook.Add( "HUDPaint", "HUDPaint_DrawABox", function()
 				render.SetStencilEnable( false )
 
 				-- Now render the actual stroke
+				local circles = {}
 				cam.Start2D()
-					draw.SimpleText( "Hello there matthew!" )
+					-- draw.SimpleText( "Hello there matthew!" )
 
 					local function mask()
 						local x, y = clickpos()
 						local dist = math.Distance( LastMousePosX, LastMousePosY, x, y )
-						local extra = 5
-						local off = 4
+						local extra = 0
+						local off = 0
 						for p = 1 - extra, dist + extra do
 							local ix = ( LastMousePosX - x ) / dist * p
 							local iy = ( LastMousePosY - y ) / dist * p
@@ -194,7 +196,9 @@ hook.Add( "HUDPaint", "HUDPaint_DrawABox", function()
 								end
 							local seg = 16
 							local rotate = 0
-							draw.Circle( x + ix, y + iy, radius, seg, rotate )
+							surface.SetDrawColor( 255, 255, 255, 100 )
+							table.insert( circles, { x = x + ix, y = y + iy, r = radius, s = seg, rotate = rotate } )
+							draw.Circle( x + ix, y + iy, radius / BorderAllowance, seg, rotate )
 						end
 						if ( dist != 0 ) then
 							Dirty = true
@@ -212,13 +216,22 @@ hook.Add( "HUDPaint", "HUDPaint_DrawABox", function()
 			render.PopRenderTarget()
 
 			-- Now blur for paint stroke effect - No this makes the edge effect even MORE obvious
-			-- render.BlurRenderTarget( RenTex_Temp, 1, 1, 3 )
-			
+			render.DrawTextureToScreen( RenTex_Painting )
+			render.BlurRenderTarget( RenTex_Temp, 0, 0, 5 )
+
 			-- Then render down on to the canvas
 			render.PushRenderTarget( RenTex_Painting )
-				surface.SetMaterial( RenMat_Temp )
-				surface.SetDrawColor( 255, 255, 255, 255 )
-				surface.DrawTexturedRect( 0, 0, ScrW(), ScrH() )
+				local function mask()
+					for k, c in pairs( circles ) do
+						draw.Circle( c.x, c.y, c.r, c.s, c.rotate )
+					end
+				end
+				local function inner()
+					surface.SetMaterial( RenMat_Temp )
+					surface.SetDrawColor( 255, 255, 255, 255 )
+					surface.DrawTexturedRect( 0, 0, ScrW(), ScrH() )
+				end
+				draw.StencilBasic( mask, inner )
 			render.PopRenderTarget()
 		else
 			-- Reset lastmousepos
@@ -228,7 +241,7 @@ hook.Add( "HUDPaint", "HUDPaint_DrawABox", function()
 		if ( Dirty ) then
 			-- Now blur for paint stroke effect
 			render.DrawTextureToScreen( RenTex_Painting ) -- Required BEFORE blur otherwise it can't render this frame
-			render.BlurRenderTarget( RenTex_Painting, 0, 0, 5 )
+			-- render.BlurRenderTarget( RenTex_Painting, 0, 0, 1 )
 			Dirty = false
 		end
 
