@@ -75,6 +75,78 @@ hook.Add( "HUDShouldDraw", "HideHUD", function( name )
 	if ( ( click and name != "CHudGMod" and name != "CHudMenu" ) or ScreenshotRequested ) then return false end
 end )
 
+-- https://www.dafont.com/artesanias.font
+local font = "MC_Paint_Font"
+surface.CreateFont( font, {
+	font = "Artesanias",
+	extended = false,
+	size = 48,
+	weight = 1700,
+	blursize = 0,
+	scanlines = 0,
+	antialias = true,
+	underline = false,
+	italic = true,
+	strikeout = false,
+	symbol = false,
+	rotary = false,
+	shadow = false,
+	additive = false,
+	outline = false,
+} )
+function MC_Paint_VGUI( image )
+	local DermaPanel = vgui.Create( "DFrame" )
+	DermaPanel:SetSize( ScrW() / 1.2, ScrH() / 1.2 )
+	DermaPanel:Center()
+	DermaPanel:SetTitle( "Painting!" )
+	DermaPanel:SetDraggable( true )
+	DermaPanel:MakePopup()
+	local w, h = DermaPanel:GetSize()
+
+	-- Container panel
+	local w, h = w - 24, h - 22 - 24
+	local BGPanel = vgui.Create( "DPanel", DermaPanel )
+	BGPanel:SetSize( w, h )
+	BGPanel:SetPos( 12, 22 + 12 )
+	BGPanel:SetDrawBackground( false )
+
+	-- Wood background
+	local img_bg = vgui.Create( "DImage", BGPanel )
+	img_bg:SetSize( w, h )
+	img_bg:SetImage( "models/props_foliage/oak_tree01" )
+
+	-- Blurred out screenshot of Construct
+	local img_construct = vgui.Create( "DImage", BGPanel )
+	img_construct:SetSize( w - 20, h - 20 )
+	img_construct:Center()
+	img_construct:SetMaterial( RenMat_Painting )
+
+	local img_backdrop = vgui.Create( "DImage", BGPanel )
+	img_backdrop:SetMaterial( "models/debug/debugwhite" )
+
+	local EditLabel = vgui.Create( "DLabelEditable", img_backdrop )
+	EditLabel:SetFont( font )
+	EditLabel:SetText( AnalyzeData.Title )
+	EditLabel:SizeToContents()
+	EditLabel:SetTextColor( Color( 70, 120, 120, 255 ) )
+	EditLabel:Center()
+	EditLabel:SetPos( EditLabel:GetPos(), h - 32 )
+
+	local textw, texth = EditLabel:GetSize()
+	img_backdrop:SetSize( textw + 8, texth + 8 )
+	img_backdrop:Center()
+	img_backdrop:SetPos( img_backdrop:GetPos(), h - 48 )
+	EditLabel:Center()
+
+	-- Flatgrass sign
+	-- local img_text = vgui.Create( "DImage", BGPanel )
+	-- img_text:SetPos( 10, 20 )
+	-- img_text:SetSize( 380, 130 )
+	-- img_text:SetImage( "gm_construct/flatsign" )
+
+	-- timer.Simple( 10, function() BGPanel:Remove() end )
+end
+
 local Style = 1
 local style = {}
 local LastMousePosX, LastMousePosX
@@ -143,31 +215,55 @@ hook.Add( "Think", "Think_MC_Paint", function()
 		end
 	end
 	clicksize = click and clicksize or 0
+
+	-- Saving painting input is in HUDPaint
 end )
 
 local Dirty = false
 local BorderAllowance = 5 -- Stroke border allowance to stop weird edge rendering (render big and then cut back down to size)
 hook.Add( "HUDPaint", "HUDPaint_DrawABox", function()
 	local function drawcanvas()
-		render.DrawTextureToScreen( RenTex_Painting ) -- TODO TEMP REMOVE
+		render.DrawTextureToScreen( RenTex_Painting )
 		-- Brush location and size
 		local x, y = clickpos()
 		surface.DrawCircle( x, y, math.max( 1, clicksize ), 255, 255, 255 )
 
 		-- Debug test analyze
-		for x = 1, AnalyzeChunks do
-			for y = 1, AnalyzeChunks do
-				local ax, ay = GetAnalyzePos( x, y )
-				local w, h = 8, 8
-				surface.DrawRect( ax - w / 2, ay - h / 2, w, h )
-				-- local json = util.TableToJSON( AnalyzeData[x][y] )
-				local json = AnalyzeData[x][y]
-				draw.SimpleText( json, "DermaDefault", ax, ay )
-			end
-		end
+		-- for x = 1, AnalyzeChunks do
+			-- for y = 1, AnalyzeChunks do
+				-- local ax, ay = GetAnalyzePos( x, y )
+				-- local w, h = 8, 8
+				-- surface.DrawRect( ax - w / 2, ay - h / 2, w, h )
+				-- -- local json = util.TableToJSON( AnalyzeData[x][y] )
+				-- local json = AnalyzeData[x][y]
+				-- draw.SimpleText( json, "DermaDefault", ax, ay )
+			-- end
+		-- end
 	end
 
 	if ( Painting ) then
+		if ( LocalPlayer():KeyPressed( IN_USE ) ) then
+			render.DrawTextureToScreen( RenTex_Painting )
+			local data = render.Capture( {
+				format = "jpeg",
+				quality = 70,
+				h = ScrH(),
+				w = ScrW(),
+				x = 0,
+				y = 0,
+			} )
+			file.CreateDir( "mc_paint" )
+			local f = file.Open( "mc_paint/painting_" .. CurTime() .. ".jpg", "wb", "DATA" )
+				f:Write( data )
+			f:Close()
+
+			-- Save out data
+			file.Write( "mc_paint/painting_" .. CurTime() .. ".txt", util.TableToJSON( AnalyzeData, true ) )
+
+			MC_Paint_VGUI( "mc_paint/painting_" .. CurTime() .. ".jpg" )
+			Painting = nil
+		end
+
 		if ( click ) then
 			-- First render to temp target for any unique effects
 			render.PushRenderTarget( RenTex_TempAlpha )
@@ -298,17 +394,107 @@ hook.Add( "PostRender", "example_screenshot", function()
 			y = 0,
 		} )
 		file.CreateDir( "mc_paint" )
-		local f = file.Open( "mc_paint/painting.jpg", "wb", "DATA" )
+		local f = file.Open( "mc_paint/painting_temp.jpg", "wb", "DATA" )
 			f:Write( data )
 		f:Close()
 
 		-- Load in as material
-		Painting = Material( "../data/mc_paint/painting.jpg" )
+		Painting = Material( "../data/mc_paint/painting_temp.jpg" )
 
 		ScreenshotRequested = false
 	end
 end )
 
+-- Note: this is just for testing the concept; ideally should be locally in data, net to server, or www to website
+local ImageTypes = {
+	["Ocean"] = {
+		["Water"] = { 90, ">=" },
+	},
+	["Sky"] = {
+		["Sky"] = { 70, ">=" },
+	},
+	["Night Sky"] = {
+		["Night Sky"] = { 70, ">=" },
+	},
+	["Beach"] = {
+		["Water"] = { 30, ">=" },
+		["Sand"] = { 30, ">=" },
+	},
+	["Beach"] = {
+		["Water"] = { 20, ">=" },
+		["Sky"] = { 50, ">=" },
+	},
+	["Landscape"] = {
+		["Grass"] = { 40, ">=" },
+	},
+	["Landscape"] = {
+		["Grass"] = { 30, ">=" },
+		["Sky"] = { 40, ">=" },
+	},
+	["Urban Landscape"] = {
+		["Concrete"] = { 40, ">=" },
+	},
+	["Urban Landscape"] = {
+		["Concrete"] = { 30, ">=" },
+		["Sky"] = { 40, ">=" },
+	},
+	["Portrait"] = {
+		["Flesh"] = { 30, ">=" },
+	},
+}
+local FuzzyAmounts = {
+	[10] = {
+		"a smidge of",
+		"a suggestion of",
+		"a modest bit of",
+		"a modest amount of",
+		"a piddling of",
+	},
+	[30] = {
+		"a little",
+		"some",
+		"a bit of",
+		"a part of",
+		"a helping of",
+	},
+	[51] = {
+		"more of",
+		"a mass of",
+		"a majority of",
+		"a greater part of",
+		"a larger part of",
+		"a large part of",
+		"more than half of",
+	},
+	[80] = {
+		"a lot of",
+		"an added majority of",
+	},
+}
+local function GetFuzzyAmount( amount )
+	local closest = nil
+		for max, v in pairs( FuzzyAmounts ) do
+			-- print( 
+			if ( amount <= max ) then
+				closest = max
+			else
+				break
+			end
+		end
+		print( closest )
+	return FuzzyAmounts[closest][math.random( 1, #FuzzyAmounts[closest] )]
+end
+local TitleLayouts = {
+	function( content, othernotables )
+		local title = content
+			local linkword = " with "
+			for k, notable in pairs( othernotables ) do
+				title = title .. linkword .. GetFuzzyAmount( AnalyzeData.Breakdown[notable] ) .. " " .. string.lower( notable )
+				linkword = " and "
+			end
+		return title
+	end,
+}
 function AnalyzeImage()
 	-- Break screen down into chunks (try 2:2 to start?)
 	local dist = 1000000
@@ -337,9 +523,57 @@ function AnalyzeImage()
 			total = total + typ
 		end
 	print( "Total: " .. total )
+	AnalyzeData.Breakdown = {}
 	for k, typ in pairs ( types ) do
+		AnalyzeData.Breakdown[k] = typ / total * 100
 		print( k .. ": " .. typ / total * 100 )
 	end
+
+	-- Try to match breakdown with previous understanding
+	local maxscore = 0
+	local closest = "Unknown"
+	for name, typ in pairs( ImageTypes ) do
+		print( "test: " .. name )
+		local score = 0
+			local count = 0
+				for content, value in pairs( typ ) do
+					count = count + 1
+				end
+			for content, value in pairs( typ ) do
+				local percent = AnalyzeData.Breakdown[content]
+				if ( percent ) then
+					if ( value[2] == ">=" and percent >= value[1] ) then
+						print( "add score for " .. content .. ": " .. ( 100 / count ) )
+						score = score + 100 / count
+					end
+				end
+			end
+		if ( score > maxscore ) then
+			maxscore = score
+			closest = name
+			print( "new max: " .. closest .. " " .. maxscore )
+		end
+	end
+	-- Find any other notable parts of the painting which weren't in the definition
+	local othernotables = {}
+		if ( closest != "Unknown" ) then
+			for content, percent in pairs( AnalyzeData.Breakdown ) do
+				local found = false
+					for match, value in pairs( ImageTypes[closest] ) do
+						if ( content == match ) then
+							found = true
+							break
+						end
+					end
+				if ( !found ) then
+					table.insert( othernotables, content )
+				end
+			end
+		end
+	local title = TitleLayouts[math.random( 1, #TitleLayouts )]( closest, othernotables )
+	AnalyzeData.Title = title
+	-- print( title )
+	-- hook.Run( "HUDItemPickedUp", "What a beautiful " .. title .. " painting!" )
 
 	-- Raytrace to find hit
 		-- If ent then
