@@ -149,10 +149,6 @@ end
 
 local Style = 1
 local style = {}
-local LastMousePosX, LastMousePosX
-local clickpos, clicksize
-hook.Add( "Think", "Think_MC_Paint", function()
-	-- Style input
 	local colourmult = {
 		[ "$pp_colour_addr" ] = 0,
 		[ "$pp_colour_addg" ] = 0,
@@ -186,7 +182,43 @@ hook.Add( "Think", "Think_MC_Paint", function()
 		function()
 			return true
 		end,
+		function( x, y )
+			render.PushRenderTarget( RenTex_Painting )
+				-- local function mask()
+					-- surface.DrawTexturedRect( x, y, 1, 1 )
+				-- end
+				-- local function inner()
+					surface.SetMaterial( Painting )
+					surface.SetDrawColor( 255, 255, 255, 255 )
+					-- surface.DrawTexturedRect( 0, 0, ScrW(), ScrH() )
+					surface.DrawTexturedRectUV( x, y, 1, 1, x / ScrW(), y / ScrH(), 1, 1 )
+				-- end
+				-- draw.StencilBasic( mask, inner )
+				render.CapturePixels()
+
+				local r, g, b = render.ReadPixel( x, y )
+				print( "hi" )
+				print( x .. ", " .. y )
+				print( r )
+				print( g )
+				print( b )
+			render.PopRenderTarget()
+		end,
 	}
+local style_drawdefault = {}
+	style_drawdefault = {
+		true,
+		true,
+		true,
+		true,
+		true,
+		true,
+		false,
+	}
+local LastMousePosX, LastMousePosX
+local clickpos, clicksize
+hook.Add( "Think", "Think_MC_Paint", function()
+	-- Style input
 	for inp = 1, #style do
 		if ( input.IsButtonDown( KEY_PAD_0 + inp ) ) then
 			Style = inp
@@ -222,6 +254,8 @@ end )
 local Dirty = false
 local BorderAllowance = 5 -- Stroke border allowance to stop weird edge rendering (render big and then cut back down to size)
 hook.Add( "HUDPaint", "HUDPaint_DrawABox", function()
+	local blur
+
 	local function drawcanvas()
 		render.DrawTextureToScreen( RenTex_Painting )
 		-- Brush location and size
@@ -229,16 +263,16 @@ hook.Add( "HUDPaint", "HUDPaint_DrawABox", function()
 		surface.DrawCircle( x, y, math.max( 1, clicksize ), 255, 255, 255 )
 
 		-- Debug test analyze
-		-- for x = 1, AnalyzeChunks do
-			-- for y = 1, AnalyzeChunks do
-				-- local ax, ay = GetAnalyzePos( x, y )
-				-- local w, h = 8, 8
-				-- surface.DrawRect( ax - w / 2, ay - h / 2, w, h )
-				-- -- local json = util.TableToJSON( AnalyzeData[x][y] )
-				-- local json = AnalyzeData[x][y]
-				-- draw.SimpleText( json, "DermaDefault", ax, ay )
-			-- end
-		-- end
+		for x = 1, AnalyzeChunks do
+			for y = 1, AnalyzeChunks do
+				local ax, ay = GetAnalyzePos( x, y )
+				local w, h = 8, 8
+				surface.DrawRect( ax - w / 2, ay - h / 2, w, h )
+				-- local json = util.TableToJSON( AnalyzeData[x][y] )
+				local json = AnalyzeData[x][y]
+				draw.SimpleText( json, "DermaDefault", ax, ay )
+			end
+		end
 	end
 
 	if ( Painting ) then
@@ -333,10 +367,14 @@ hook.Add( "HUDPaint", "HUDPaint_DrawABox", function()
 						LastMousePosX, LastMousePosY = clickpos()
 					end
 					local function inner()
-						surface.SetDrawColor( 255, 255, 255, 255 )
-						surface.SetMaterial( Painting )
-						surface.DrawTexturedRect( 0, 0, ScrW(), ScrH() )
-						local blur = style[Style]()
+						-- Draw the internal brush stroke!
+						if ( style_drawdefault[Style] ) then
+							surface.SetDrawColor( 255, 255, 255, 255 )
+							surface.SetMaterial( Painting )
+							surface.DrawTexturedRect( 0, 0, ScrW(), ScrH() )
+						end
+						print( style[Style] )
+						blur = style[Style]( clickpos() )
 					end
 					draw.StencilBasic( mask, inner )
 				cam.End2D()
@@ -378,12 +416,6 @@ hook.Add( "PostRender", "example_screenshot", function()
 	if ( ScreenshotRequested ) then
 		AnalyzeImage()
 
-		-- Clear
-		render.PushRenderTarget( RenTex_Painting )
-			render.ClearDepth()
-			render.Clear( 255, 255, 255, 255 )
-		render.PopRenderTarget()
-
 		-- Store
 		local data = render.Capture( {
 			format = "jpeg",
@@ -400,6 +432,12 @@ hook.Add( "PostRender", "example_screenshot", function()
 
 		-- Load in as material
 		Painting = Material( "../data/mc_paint/painting_temp.jpg" )
+
+		-- Clear
+		render.PushRenderTarget( RenTex_Painting )
+			render.ClearDepth()
+			render.Clear( 255, 255, 255, 255 )
+		render.PopRenderTarget()
 
 		ScreenshotRequested = false
 	end
